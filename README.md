@@ -136,7 +136,7 @@ It does not constitute financial advice. Always do your own research.
 ## 👤 Author
 
 **Zabir** — Freelance Automation Developer  
-🔗 [Upwork Profile](https://www.upwork.com) · 📧 Contact via GitHub
+🔗 [Upwork Profile](https://www.upwork.com/freelancers/~016038a1405b233337?mp_source=share) · 📧 Contact via GitHub
 
 ---
 
