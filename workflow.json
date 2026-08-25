@@ -1,0 +1,103 @@
+{
+  "name": "Voice Agent — Stock Analysis",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "stock-agent", "responseMode": "responseNode", "options": {} },
+      "id": "vs-001", "name": "Webhook Trigger", "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [240, 300]
+    },
+    {
+      "parameters": { "jsCode": "const body = $input.first().json.body;\nconst query = body.query || '';\nconst ticker = body.ticker || '';\nconst audioData = body.audio_base64 || null;\nif (!ticker && !query) throw new Error('ticker or query is required');\nreturn [{ json: { query, ticker, audioData, hasAudio: !!audioData } }];" },
+      "id": "vs-002", "name": "Parse Input", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "leftValue": "={{ $json.hasAudio }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        }
+      },
+      "id": "vs-003", "name": "Has Audio?", "type": "n8n-nodes-base.if", "typeVersion": 2, "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/audio/transcriptions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendBody": true, "contentType": "multipart-form-data",
+        "bodyParameters": { "parameters": [{ "name": "model", "value": "whisper-1" }, { "name": "file", "value": "={{ $json.audioData }}" }] },
+        "options": {}
+      },
+      "id": "vs-004", "name": "Whisper STT", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [900, 200],
+      "credentials": { "httpHeaderAuth": { "id": "OPENAI_CRED", "name": "OpenAI API" } }
+    },
+    {
+      "parameters": { "jsCode": "const transcribed = $json.text || $('Parse Input').first().json.query;\nconst existing_ticker = $('Parse Input').first().json.ticker;\n\n// Extract ticker from transcription if not provided\nlet ticker = existing_ticker;\nif (!ticker) {\n  const match = transcribed.match(/\\b([A-Z]{2,5})\\b/);\n  ticker = match ? match[0] : 'AAPL';\n}\n\nreturn [{ json: { query: transcribed, ticker: ticker.toUpperCase() } }];" },
+      "id": "vs-005", "name": "Extract Ticker", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={{ $json.ticker }}&apikey=YOUR_ALPHA_VANTAGE_KEY",
+        "options": {}
+      },
+      "id": "vs-006", "name": "Fetch Stock Price", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={{ $('Extract Ticker').first().json.ticker }}&limit=3&apikey=YOUR_ALPHA_VANTAGE_KEY",
+        "options": {}
+      },
+      "id": "vs-007", "name": "Fetch News Sentiment", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1340, 400]
+    },
+    {
+      "parameters": { "jsCode": "const stockData = $('Fetch Stock Price').first().json['Global Quote'];\nconst newsData = $('Fetch News Sentiment').first().json;\nconst ticker = $('Extract Ticker').first().json.ticker;\nconst query = $('Extract Ticker').first().json.query;\n\nconst price = stockData['05. price'] || 'N/A';\nconst change = stockData['09. change'] || 'N/A';\nconst changePct = stockData['10. change percent'] || 'N/A';\nconst volume = stockData['06. volume'] || 'N/A';\nconst high52 = stockData['03. high'] || 'N/A';\nconst low52 = stockData['04. low'] || 'N/A';\n\nconst recentNews = (newsData.feed || []).slice(0, 3).map(n => ({\n  title: n.title,\n  sentiment: n.overall_sentiment_label,\n  score: n.overall_sentiment_score\n}));\n\nreturn [{ json: { ticker, query, price, change, changePct, volume, high52, low52, recentNews } }];" },
+      "id": "vs-008", "name": "Merge Stock Data", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/chat/completions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a financial briefing assistant. Generate a concise, natural-sounding voice summary (under 150 words). Use plain English, no jargon. End with a disclaimer that this is not financial advice.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Generate a voice briefing for {{ $json.ticker }}:\\nPrice: ${{ $json.price }} ({{ $json.changePct }} today)\\nVolume: {{ $json.volume }}\\nRecent news: {{ JSON.stringify($json.recentNews) }}\\n\\nUser query: {{ $json.query }}\"\n    }\n  ],\n  \"temperature\": 0.4,\n  \"max_tokens\": 300\n}",
+        "options": {}
+      },
+      "id": "vs-009", "name": "GPT-4o Analysis", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [1780, 300],
+      "credentials": { "httpHeaderAuth": { "id": "OPENAI_CRED", "name": "OpenAI API" } }
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/audio/speech", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendBody": true, "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"tts-1-hd\",\n  \"input\": {{ JSON.stringify($json.choices[0].message.content) }},\n  \"voice\": \"nova\",\n  \"response_format\": \"mp3\"\n}",
+        "options": {}
+      },
+      "id": "vs-010", "name": "OpenAI TTS", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.2, "position": [2000, 300],
+      "credentials": { "httpHeaderAuth": { "id": "OPENAI_CRED", "name": "OpenAI API" } }
+    },
+    {
+      "parameters": { "respondWith": "binary", "options": { "responseHeaders": { "entries": [{ "name": "Content-Type", "value": "audio/mpeg" }, { "name": "Content-Disposition", "value": "=attachment; filename=\"stock_analysis_{{ $('Merge Stock Data').first().json.ticker }}.mp3\"" }] } } },
+      "id": "vs-011", "name": "Return Audio", "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.1, "position": [2220, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": { "main": [[{ "node": "Parse Input", "type": "main", "index": 0 }]] },
+    "Parse Input": { "main": [[{ "node": "Has Audio?", "type": "main", "index": 0 }]] },
+    "Has Audio?": {
+      "main": [
+        [{ "node": "Whisper STT", "type": "main", "index": 0 }],
+        [{ "node": "Extract Ticker", "type": "main", "index": 0 }]
+      ]
+    },
+    "Whisper STT": { "main": [[{ "node": "Extract Ticker", "type": "main", "index": 0 }]] },
+    "Extract Ticker": {
+      "main": [[
+        { "node": "Fetch Stock Price", "type": "main", "index": 0 },
+        { "node": "Fetch News Sentiment", "type": "main", "index": 0 }
+      ]]
+    },
+    "Fetch Stock Price": { "main": [[{ "node": "Merge Stock Data", "type": "main", "index": 0 }]] },
+    "Fetch News Sentiment": { "main": [[{ "node": "Merge Stock Data", "type": "main", "index": 0 }]] },
+    "Merge Stock Data": { "main": [[{ "node": "GPT-4o Analysis", "type": "main", "index": 0 }]] },
+    "GPT-4o Analysis": { "main": [[{ "node": "OpenAI TTS", "type": "main", "index": 0 }]] },
+    "OpenAI TTS": { "main": [[{ "node": "Return Audio", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": false, "n8nVersion": "1.94.1" }
+}
